@@ -1,0 +1,3 @@
+# SmoQS
+
+Mock SQS/SNS
