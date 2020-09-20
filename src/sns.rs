@@ -1,6 +1,6 @@
 use crate::errors::{MyError, MyResult};
 use crate::misc::{get_attributes, get_message_attributes, get_new_id};
-use crate::state::{Message, SNSSubscription, SNSTopic, State};
+use crate::state::{Message, SNSSubscription, SNSTopic, State, TopicArn};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -50,7 +50,7 @@ pub fn create_topic(form: HashMap<String, String>, state: Arc<RwLock<State>>) ->
                 <RequestId>{}</RequestId>\
             </ResponseMetadata>\
         </CreateTopicResponse>",
-        topic_arn,
+        topic_arn.0,
         get_new_id(),
     );
     Ok(output)
@@ -61,7 +61,8 @@ pub fn delete_topic(form: HashMap<String, String>, state: Arc<RwLock<State>>) ->
         .get("TopicArn")
         .ok_or_else(|| MyError::MissingParameter("TopicArn".to_string()))?;
     let mut s = state.write()?;
-    s.remove_topic(topic_arn);
+
+    s.remove_topic(&TopicArn(topic_arn.clone()));
 
     let output = format!(
         "<DeleteTopicResponse>\
@@ -82,7 +83,8 @@ pub fn get_topic_attributes(
         .get("TopicArn")
         .ok_or_else(|| MyError::MissingParameter("TopicArn".to_string()))?;
     let s = state.read()?;
-    if let Some(t) = s.topics.get(topic_arn) {
+    let arn = TopicArn(topic_arn.clone());
+    if let Some(t) = s.topics.get(&arn) {
         let mut attributes_str = String::new();
         for (k, v) in t.attributes.iter() {
             attributes_str.push_str(&format!(
@@ -120,7 +122,8 @@ pub fn set_topic_attributes(
         .ok_or_else(|| MyError::MissingParameter("TopicArn".to_string()))?;
     let attributes = get_attributes(&form);
     let mut s = state.write()?;
-    if let Some(q) = s.topics.get_mut(topic_arn) {
+    let arn = TopicArn(topic_arn.clone());
+    if let Some(q) = s.topics.get_mut(&arn) {
         q.attributes = attributes;
         let output = format!(
             "<SetTopicAttributesResponse>\
@@ -154,7 +157,8 @@ pub fn publish(form: HashMap<String, String>, state: Arc<RwLock<State>>) -> MyRe
 
     let attributes = get_message_attributes(&form);
     let mut s = state.write()?;
-    let queue_urls = match s.topics.get_mut(target_arn) {
+    let arn = TopicArn(target_arn.clone());
+    let queue_urls = match s.topics.get_mut(&arn) {
         Some(t) => t.get_queue_urls(),
         None => {
             return Err(MyError::TopicNotFound(target_arn.clone()));
@@ -166,7 +170,8 @@ pub fn publish(form: HashMap<String, String>, state: Arc<RwLock<State>>) -> MyRe
     let message_id = message.id.clone();
 
     for queue_url in queue_urls {
-        if let Some(q) = s.queues.get_mut(&queue_url) {
+        let path = s.get_queue_path(&queue_url);
+        if let Some(q) = s.queues.get_mut(&path) {
             q.send_message(message.clone());
         }
     }
@@ -200,8 +205,9 @@ pub fn subscribe(form: HashMap<String, String>, state: Arc<RwLock<State>>) -> My
 
     let mut s = state.write()?;
     let account_id = s.account_id.clone();
-    if let Some(t) = s.topics.get_mut(topic_arn) {
-        let subscription = SNSSubscription::new_sqs(topic_arn, endpoint, &account_id);
+    let arn = TopicArn(topic_arn.clone());
+    if let Some(t) = s.topics.get_mut(&arn) {
+        let subscription = SNSSubscription::new_sqs(&arn, endpoint, &account_id);
         let subscription_arn = subscription.arn.clone();
         t.add_subscription(subscription);
 
@@ -283,7 +289,8 @@ pub fn list_subscriptions_by_topic(
 
     let s = state.read()?;
 
-    if let Some(t) = s.topics.get(topic_arn) {
+    let arn = TopicArn(topic_arn.clone());
+    if let Some(t) = s.topics.get(&arn) {
         let mut subscription_xml = String::new();
         for sub in &t.subscriptions {
             subscription_xml.push_str(&sub.get_subscription_xml());

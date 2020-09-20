@@ -2,13 +2,14 @@ use crate::misc::get_new_id;
 use md5::{Digest, Md5};
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
+use url::Url;
 
 pub struct State {
     pub account_id: String,
     region: String,
     endpoint_url: String,
-    pub queues: HashMap<String, SQSQueue>,
-    pub topics: HashMap<String, SNSTopic>,
+    pub queues: HashMap<QueuePath, SQSQueue>,
+    pub topics: HashMap<TopicArn, SNSTopic>,
 }
 
 impl State {
@@ -24,7 +25,8 @@ impl State {
 
     pub fn add_queue(&mut self, queue: SQSQueue) -> bool {
         let url = self.get_queue_url(&queue.name);
-        match self.queues.entry(url) {
+        let path = self.get_queue_path(&url);
+        match self.queues.entry(path) {
             Entry::Vacant(v) => {
                 v.insert(queue);
                 true
@@ -34,7 +36,15 @@ impl State {
     }
 
     pub fn remove_queue(&mut self, queue_url: &str) -> bool {
-        self.queues.remove(queue_url).is_some()
+        let path = self.get_queue_path(queue_url);
+        self.queues.remove(&path).is_some()
+    }
+
+    pub fn get_queue_path(&self, queue_url: &str) -> QueuePath {
+        let p = Url::parse(queue_url)
+            .map(|u| u.path().to_string())
+            .unwrap_or(queue_url.to_string());
+        QueuePath(p)
     }
 
     pub fn get_queue_url(&self, queue_name: &str) -> String {
@@ -52,15 +62,15 @@ impl State {
         }
     }
 
-    pub fn remove_topic(&mut self, topic_arn: &str) -> bool {
+    pub fn remove_topic(&mut self, topic_arn: &TopicArn) -> bool {
         self.topics.remove(topic_arn).is_some()
     }
 
-    pub fn get_topic_arn(&self, topic_name: &str) -> String {
-        format!(
+    pub fn get_topic_arn(&self, topic_name: &str) -> TopicArn {
+        TopicArn(format!(
             "arn:aws:sns:{}:{}:{}",
             self.region, self.account_id, topic_name
-        )
+        ))
     }
 }
 
@@ -130,6 +140,9 @@ impl Message {
     }
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct QueuePath(String);
+
 pub struct SQSQueue {
     pub name: String,
     pub attributes: HashMap<String, String>,
@@ -171,16 +184,16 @@ pub struct SNSSubscription {
 }
 
 impl SNSSubscription {
-    pub fn new_sqs(topic_arn: &str, endpoint: &str, account_id: &str) -> Self {
+    pub fn new_sqs(topic_arn: &TopicArn, endpoint: &str, account_id: &str) -> Self {
         let id = get_new_id();
-        let arn = format!("{}:{}", topic_arn, id);
+        let arn = format!("{}:{}", topic_arn.0, id);
         Self {
             id,
             arn,
             owner: account_id.to_string(),
             protocol: "sqs".to_string(),
             endpoint: endpoint.to_string(),
-            topic_arn: topic_arn.to_string(),
+            topic_arn: topic_arn.0.clone(),
         }
     }
 
@@ -198,6 +211,9 @@ impl SNSSubscription {
     }
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct TopicArn(pub String);
+
 pub struct SNSTopic {
     pub name: String,
     pub arn: String,
@@ -206,10 +222,10 @@ pub struct SNSTopic {
 }
 
 impl SNSTopic {
-    pub fn new(name: &str, arn: &str, attributes: HashMap<String, String>) -> Self {
+    pub fn new(name: &str, arn: &TopicArn, attributes: HashMap<String, String>) -> Self {
         Self {
             name: name.to_string(),
-            arn: arn.to_string(),
+            arn: arn.0.clone(),
             attributes,
             subscriptions: Vec::new(),
         }

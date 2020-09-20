@@ -82,7 +82,8 @@ pub fn get_queue_attributes(
         .get("QueueUrl")
         .ok_or_else(|| MyError::MissingParameter("QueueUrl".to_string()))?;
     let s = state.read()?;
-    if let Some(q) = s.queues.get(queue_url) {
+    let path = s.get_queue_path(queue_url);
+    if let Some(q) = s.queues.get(&path) {
         let mut attributes_str = String::new();
         for (k, v) in q.attributes.iter() {
             attributes_str.push_str(&format!(
@@ -120,7 +121,8 @@ pub fn set_queue_attributes(
         .ok_or_else(|| MyError::MissingParameter("QueueUrl".to_string()))?;
     let attributes = get_attributes(&form);
     let mut s = state.write()?;
-    if let Some(q) = s.queues.get_mut(queue_url) {
+    let path = s.get_queue_path(queue_url);
+    if let Some(q) = s.queues.get_mut(&path) {
         q.attributes = attributes;
         let output = format!(
             "<SetQueueAttributesResponse>\
@@ -151,7 +153,8 @@ pub fn send_message(form: HashMap<String, String>, state: Arc<RwLock<State>>) ->
         .unwrap_or(0);
     let attributes = get_message_attributes(&form);
     let mut s = state.write()?;
-    if let Some(q) = s.queues.get_mut(queue_url) {
+    let path = s.get_queue_path(queue_url);
+    if let Some(q) = s.queues.get_mut(&path) {
         let message = Message::new(message_body, attributes);
         let message_id = message.id.clone();
         let md5_message = message.get_content_md5();
@@ -197,7 +200,8 @@ pub fn receive_message(
     }
     let attribute_names = get_message_attribute_names(&form);
     let mut s = state.write()?;
-    if let Some(q) = s.queues.get_mut(queue_url) {
+    let path = s.get_queue_path(queue_url);
+    if let Some(q) = s.queues.get_mut(&path) {
         // Pop messages.
         let messages = q.receive_messages(max_count);
         let messages_xml: Vec<String> = messages
