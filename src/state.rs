@@ -12,10 +12,10 @@ pub struct State {
 }
 
 impl State {
-    pub fn new(port: u16) -> Self {
+    pub fn new(port: u16, region: &str, account_id: &str) -> Self {
         Self {
-            account_id: "000000000000".to_string(),
-            region: "ap-southeast-2".to_string(),
+            account_id: account_id.to_string(),
+            region: region.to_string(),
             endpoint_url: format!("http://localhost:{}", port),
             queues: HashMap::new(),
             topics: HashMap::new(),

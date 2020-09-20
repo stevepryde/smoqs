@@ -28,16 +28,27 @@ mod sqs;
 mod state;
 mod xml;
 
+const VERSION: &'static str = env!("CARGO_PKG_VERSION");
+
 #[derive(Debug, StructOpt)]
 #[structopt(name = "SmoQS", about = "A quick and dirty SNS/SQS mock")]
 pub struct Opt {
     /// The port to listen on. Default is 3566.
     #[structopt(short, long, env = "SMOQS_PORT")]
     port: Option<u16>,
+
+    /// The default AWS region. Default is ap-southeast-2.
+    #[structopt(long, env = "SMOQS_REGION")]
+    region: Option<String>,
+
+    #[structopt(long, env = "SMOQS_ACCOUNTID")]
+    account: Option<String>,
 }
 
 #[tokio::main]
 async fn main() {
+    println!("SmoQS Version {}", VERSION);
+    println!("-------------------");
     env_logger::from_env(Env::default().default_filter_or("smoqs=debug")).init();
     let opt = Opt::from_args();
 
@@ -48,6 +59,9 @@ async fn main() {
         std::process::exit(1);
     }
 
+    let region = opt.region.unwrap_or_else(|| "ap-southeast-2".to_string());
+    let account_id = opt.account.unwrap_or_else(|| "000000000000".to_string());
+
     let addr: SocketAddr = match format!("127.0.0.1:{}", port).parse() {
         Ok(x) => x,
         Err(e) => {
@@ -57,7 +71,7 @@ async fn main() {
     };
 
     // Set up state.
-    let state: Arc<RwLock<State>> = Arc::new(RwLock::new(State::new(port)));
+    let state: Arc<RwLock<State>> = Arc::new(RwLock::new(State::new(port, &region, &account_id)));
     let state_filter = warp::any().map(move || state.clone());
 
     // Routes.

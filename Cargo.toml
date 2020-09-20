@@ -2,7 +2,7 @@
 authors = ["Steve Pryde <steve@stevepryde.com>"]
 edition = "2018"
 name = "smoqs"
-version = "0.1.0"
+version = "0.2.0"
 license = "MIT"
 description = "SmoQS is a mock for SNS/SQS providing a fast, in-memory queue"
 homepage = "https://github.com/stevepryde/smoqs"

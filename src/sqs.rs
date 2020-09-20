@@ -207,12 +207,12 @@ pub fn receive_message(
 
         let output = format!(
             "<ReceiveMessageResponse>\
-              <ReceiveMessageResult>
-                {}
-              </ReceiveMessageResult>
-              <ResponseMetadata>
-                <RequestId>{}</RequestId>
-              </ResponseMetadata>
+              <ReceiveMessageResult>\
+                {}\
+              </ReceiveMessageResult>\
+              <ResponseMetadata>\
+                <RequestId>{}</RequestId>\
+              </ResponseMetadata>\
             </ReceiveMessageResponse>",
             messages_xml.join(""),
             get_new_id(),
