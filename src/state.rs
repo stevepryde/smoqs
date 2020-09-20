@@ -1,4 +1,5 @@
 use crate::misc::{escape_xml, get_new_id};
+use chrono::{DateTime, Utc};
 use log::warn;
 use md5::{Digest, Md5};
 use std::collections::hash_map::Entry;
@@ -10,6 +11,7 @@ pub struct State {
     endpoint_url: String,
     pub queues: HashMap<QueuePath, SQSQueue>,
     pub topics: HashMap<TopicArn, SNSTopic>,
+    pub received_messages: HashMap<ReceiveHandle, ReceivedMessage>,
 }
 
 impl State {
@@ -20,6 +22,7 @@ impl State {
             endpoint_url: format!("http://localhost:{}", port),
             queues: HashMap::new(),
             topics: HashMap::new(),
+            received_messages: HashMap::new(),
         }
     }
 
@@ -75,6 +78,22 @@ impl State {
             self.region, self.account_id, topic_name
         ))
     }
+
+    pub fn add_received_message(
+        &mut self,
+        message: Message,
+        queue_path: QueuePath,
+        timeout_seconds: u32,
+    ) -> ReceiveHandle {
+        let handle = ReceiveHandle::new();
+        let rec_msg = ReceivedMessage::new(message, queue_path, timeout_seconds);
+        self.received_messages.insert(handle.clone(), rec_msg);
+        handle
+    }
+
+    pub fn delete_received_message(&mut self, handle: &ReceiveHandle) {
+        self.received_messages.remove(handle);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -82,6 +101,8 @@ pub struct Message {
     pub id: String,
     pub content: String,
     attributes: HashMap<String, String>,
+    pub receive_count: u8,
+    pub receipt_handle: ReceiveHandle,
 }
 
 impl Message {
@@ -90,6 +111,8 @@ impl Message {
             id: uuid::Uuid::new_v4().to_string(),
             content: content.to_string(),
             attributes,
+            receive_count: 0,
+            receipt_handle: ReceiveHandle::new(),
         }
     }
 
@@ -108,7 +131,7 @@ impl Message {
         format!("{:x}", hasher.finalize())
     }
 
-    pub fn get_attribute_xml(&self, attribute_names: &Vec<String>) -> String {
+    pub fn get_attribute_xml(&self, attribute_names: &[String]) -> String {
         let mut attributes_str = String::new();
         for k in attribute_names {
             if let Some(v) = self.attributes.get(k) {
@@ -125,18 +148,19 @@ impl Message {
         attributes_str
     }
 
-    pub fn get_message_xml(&self, attribute_names: &Vec<String>) -> String {
+    pub fn get_message_xml(&self, attribute_names: &[String]) -> String {
         format!(
             "<Message>\
               <MessageId>{}</MessageId>\
               <ReceiptHandle>\
-                Dummy\
+                {}\
               </ReceiptHandle>\
               <MD5OfBody>{}</MD5OfBody>\
               <Body>{}</Body>\
               {}\
             </Message>",
             self.id,
+            self.receipt_handle.0,
             self.get_content_md5(),
             escape_xml(&self.content),
             self.get_attribute_xml(attribute_names),
@@ -163,6 +187,19 @@ impl SQSQueue {
             attributes,
             messages: VecDeque::new(),
             bell: None,
+        }
+    }
+
+    pub fn get_attribute(&self, key: &str, default: &str) -> String {
+        self.attributes
+            .get(key)
+            .cloned()
+            .unwrap_or(default.to_string())
+    }
+
+    pub fn set_attribute_default(&mut self, key: &str, default: &str) {
+        if let Entry::Vacant(v) = self.attributes.entry(key.to_string()) {
+            v.insert(default.to_string());
         }
     }
 
@@ -259,6 +296,12 @@ impl SNSTopic {
     }
 
     pub fn add_subscription(&mut self, subscription: SNSSubscription) {
+        for sub in self.subscriptions.iter() {
+            if sub.topic_arn == subscription.topic_arn && sub.endpoint == subscription.endpoint {
+                // Already exists - do nothing.
+                return;
+            }
+        }
         self.subscriptions.push(subscription);
     }
 
@@ -271,5 +314,35 @@ impl SNSTopic {
             .iter()
             .map(|s| s.endpoint.clone())
             .collect()
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct ReceiveHandle(pub String);
+
+impl ReceiveHandle {
+    pub fn new() -> Self {
+        Self(get_new_id())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ReceivedMessage {
+    pub message: Message,
+    pub queue_path: QueuePath,
+    expires: DateTime<Utc>,
+}
+
+impl ReceivedMessage {
+    pub fn new(message: Message, queue_path: QueuePath, timeout_seconds: u32) -> Self {
+        Self {
+            message,
+            queue_path,
+            expires: Utc::now() + chrono::Duration::seconds(timeout_seconds as i64),
+        }
+    }
+
+    pub fn has_expired(&self) -> bool {
+        Utc::now() > self.expires
     }
 }

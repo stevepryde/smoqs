@@ -2,7 +2,7 @@ use crate::sqs::{
     create_queue, delete_message, delete_queue, get_queue_attributes, list_queues, receive_message,
     send_message, set_queue_attributes,
 };
-use crate::state::State;
+use crate::state::{ReceiveHandle, ReceivedMessage, State};
 
 use env_logger::Env;
 use log::{debug, info};
@@ -19,6 +19,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use structopt::StructOpt;
 use tokio::sync::Mutex;
+use tokio::time::{delay_for, Duration};
 use warp::http::Response;
 use warp::{Filter, Reply};
 
@@ -73,7 +74,12 @@ async fn main() {
 
     // Set up state.
     let state: Arc<Mutex<State>> = Arc::new(Mutex::new(State::new(port, &region, &account_id)));
-    let state_filter = warp::any().map(move || state.clone());
+    let cloned_state = state.clone();
+    let state_filter = warp::any().map(move || cloned_state.clone());
+
+    let cloned_state = state.clone();
+    // Spawn the received messages handler as a separate task.
+    tokio::spawn(async move { process_received_messages(cloned_state).await });
 
     // Routes.
     let healthz = warp::path!("healthz").map(|| "OK".to_string());
@@ -136,6 +142,39 @@ pub async fn handle_request(
             let resp = MyError::MissingAction.get_error_response();
             debug!("Response:\n{}", resp);
             Ok(Response::builder().status(400).body(resp))
+        }
+    }
+}
+
+pub async fn process_received_messages(state: Arc<Mutex<State>>) {
+    loop {
+        delay_for(Duration::new(5, 0)).await;
+
+        // Send expired received messages back to original queue
+        // unless receive count >= 3 in which case delete them.
+        {
+            let mut remove_handles: Vec<(ReceiveHandle, ReceivedMessage)> = Vec::new();
+            let mut s = state.lock().await;
+            for (handle, msg) in s.received_messages.iter() {
+                if msg.has_expired() {
+                    remove_handles.push((handle.clone(), msg.clone()));
+                }
+            }
+
+            for (handle, msg) in remove_handles {
+                s.delete_received_message(&handle);
+
+                if msg.message.receive_count < 3 {
+                    // Move back to original queue.
+                    if let Some(q) = s.queues.get_mut(&msg.queue_path) {
+                        debug!(
+                            "Requeuing message to queue {} after Visibility Timeout: {}",
+                            q.name, msg.message.content
+                        );
+                        q.send_message(msg.message);
+                    }
+                }
+            }
         }
     }
 }

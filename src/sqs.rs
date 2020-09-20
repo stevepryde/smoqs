@@ -2,7 +2,7 @@ use crate::errors::{MyError, MyResult};
 use crate::misc::{
     escape_xml, get_attributes, get_message_attribute_names, get_message_attributes, get_new_id,
 };
-use crate::state::{Message, SQSQueue, State};
+use crate::state::{Message, ReceiveHandle, SQSQueue, State};
 use crate::xml::FormatXML;
 
 use std::collections::HashMap;
@@ -46,7 +46,8 @@ pub async fn create_queue(
         .get("QueueName")
         .ok_or_else(|| MyError::MissingParameter("QueueName".to_string()))?;
     let attributes = get_attributes(&form);
-    let q = SQSQueue::new(queue_name, attributes);
+    let mut q = SQSQueue::new(queue_name, attributes);
+    q.set_attribute_default("VisibilityTimeout", "30");
 
     let queue_url = {
         let mut s = state.lock().await;
@@ -206,14 +207,13 @@ pub async fn send_message(
 }
 
 enum MessageOrWaiter {
-    Message(Vec<String>),
+    Message(Vec<Message>),
     Waiter(Receiver<bool>),
 }
 
 async fn get_message_or_waiter(
     queue_url: &str,
     max_count: u8,
-    attribute_names: &Vec<String>,
     state: Arc<Mutex<State>>,
 ) -> MyResult<MessageOrWaiter> {
     let mut s = state.lock().await;
@@ -224,11 +224,7 @@ async fn get_message_or_waiter(
                 true => {
                     // Pop messages.
                     let messages = q.receive_messages(max_count);
-                    let messages_xml = messages
-                        .iter()
-                        .map(|m| m.get_message_xml(attribute_names))
-                        .collect();
-                    Ok(MessageOrWaiter::Message(messages_xml))
+                    Ok(MessageOrWaiter::Message(messages))
                 }
                 false => Ok(MessageOrWaiter::Waiter(q.get_waiter())),
             }
@@ -257,42 +253,65 @@ pub async fn receive_message(
         .map(|n| n.parse().ok())
         .flatten()
         .unwrap_or(0);
+    let visibility_timeout_recv: Option<u32> = form
+        .get("VisibilityTimeout")
+        .map(|n| n.parse().ok())
+        .flatten();
     let attribute_names = get_message_attribute_names(&form);
 
-    let messages_xml: Vec<String> = match get_message_or_waiter(
-        &queue_url,
-        max_count,
-        &attribute_names,
-        state.clone(),
-    )
-    .await?
-    {
-        MessageOrWaiter::Message(x) => {
-            // Message already waiting.
-            x
-        }
-        MessageOrWaiter::Waiter(w) => {
-            if wait_time_seconds > 0 {
-                // No messages, but we want to wait.
-                if tokio::time::timeout(Duration::new(wait_time_seconds, 0), w)
-                    .await
-                    .is_ok()
-                {
-                    // We got a message.
-                    match get_message_or_waiter(&queue_url, max_count, &attribute_names, state)
-                        .await?
+    let mut messages: Vec<Message> =
+        match get_message_or_waiter(&queue_url, max_count, state.clone()).await? {
+            MessageOrWaiter::Message(x) => {
+                // Message already waiting.
+                x
+            }
+            MessageOrWaiter::Waiter(w) => {
+                if wait_time_seconds > 0 {
+                    // No messages, but we want to wait.
+                    if tokio::time::timeout(Duration::new(wait_time_seconds, 0), w)
+                        .await
+                        .is_ok()
                     {
-                        MessageOrWaiter::Message(x) => x,
-                        MessageOrWaiter::Waiter(_) => Vec::new(),
+                        // We got a message.
+                        match get_message_or_waiter(&queue_url, max_count, state.clone()).await? {
+                            MessageOrWaiter::Message(x) => x,
+                            MessageOrWaiter::Waiter(_) => Vec::new(),
+                        }
+                    } else {
+                        Vec::new()
                     }
                 } else {
                     Vec::new()
                 }
-            } else {
-                Vec::new()
+            }
+        };
+
+    if !messages.is_empty() {
+        let mut s = state.lock().await;
+        let path = s.get_queue_path(queue_url);
+        if let Some(q) = s.queues.get(&path) {
+            let visibility_timeout_queue: u32 = q
+                .get_attribute("VisibilityTimeout", "600")
+                .parse()
+                .unwrap_or(600);
+
+            // Prefer visibility timeout of the request, and fallback to that of the queue.
+            let visibility_timeout = visibility_timeout_recv.unwrap_or(visibility_timeout_queue);
+
+            // All received messages are cached, so they can be requeued if not
+            // deleted within the required timeout.
+            for message in messages.iter_mut() {
+                message.receive_count += 1;
+                message.receipt_handle =
+                    s.add_received_message(message.clone(), path.clone(), visibility_timeout);
             }
         }
-    };
+    }
+
+    let messages_xml: Vec<String> = messages
+        .iter()
+        .map(|m| m.get_message_xml(&attribute_names))
+        .collect();
 
     let output = format!(
         "<ReceiveMessageResponse>\
@@ -310,9 +329,15 @@ pub async fn receive_message(
 }
 
 pub async fn delete_message(
-    _form: HashMap<String, String>,
-    _state: Arc<Mutex<State>>,
+    form: HashMap<String, String>,
+    state: Arc<Mutex<State>>,
 ) -> MyResult<String> {
+    let receipt_handle = form
+        .get("ReceiptHandle")
+        .ok_or_else(|| MyError::MissingParameter("ReceiptHandle".to_string()))?;
+    let mut s = state.lock().await;
+    s.delete_received_message(&ReceiveHandle(receipt_handle.clone()));
+
     let output = format!(
         "<DeleteMessageResponse>\
           <ResponseMetadata>\
