@@ -1,6 +1,7 @@
 use crate::errors::{MyError, MyResult};
-use crate::misc::{get_attributes, get_message_attributes, get_new_id};
+use crate::misc::{escape_xml, get_attributes, get_message_attributes, get_new_id};
 use crate::state::{Message, SNSSubscription, SNSTopic, State, TopicArn};
+use log::debug;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -12,7 +13,10 @@ pub async fn list_topics(
     let s = state.lock().await;
     let mut topics_xml = String::new();
     for topic in s.topics.values() {
-        let topic_xml = format!("<Topic><TopicArn>{}</TopicArn></Topic>", topic.arn);
+        let topic_xml = format!(
+            "<Topic><TopicArn>{}</TopicArn></Topic>",
+            escape_xml(&topic.arn)
+        );
         topics_xml.push_str(&topic_xml);
     }
 
@@ -57,7 +61,7 @@ pub async fn create_topic(
                 <RequestId>{}</RequestId>\
             </ResponseMetadata>\
         </CreateTopicResponse>",
-        topic_arn.0,
+        escape_xml(&topic_arn.0),
         get_new_id(),
     );
     Ok(output)
@@ -102,7 +106,8 @@ pub async fn get_topic_attributes(
                     <Name>{}</Name>\
                     <Value>{}</Value>\
                  </Attribute>",
-                k, v
+                escape_xml(k),
+                escape_xml(v)
             ));
         }
         let output = format!(
@@ -157,13 +162,18 @@ pub async fn publish(form: HashMap<String, String>, state: Arc<Mutex<State>>) ->
             .ok_or_else(|| MyError::MissingParameter("TopicArn".to_string()))?,
     };
 
-    let message_body = form
+    let mut message_body = form
         .get("Message")
-        .ok_or_else(|| MyError::MissingParameter("Message".to_string()))?;
-    let _message_structure = form
+        .ok_or_else(|| MyError::MissingParameter("Message".to_string()))?
+        .clone();
+    let message_structure = form
         .get("MessageStructure")
         .cloned()
         .unwrap_or_else(|| "json".to_string());
+
+    if message_structure == "json" {
+        message_body = format!("{{\"Message\":{}}}", message_body);
+    }
 
     let attributes = get_message_attributes(&form);
     let mut s = state.lock().await;
@@ -176,12 +186,13 @@ pub async fn publish(form: HashMap<String, String>, state: Arc<Mutex<State>>) ->
     };
 
     // Send message to all subscribed queues.
-    let message = Message::new(message_body, attributes);
+    let message = Message::new(&message_body, attributes);
     let message_id = message.id.clone();
 
     for queue_url in queue_urls {
         let path = s.get_queue_path(&queue_url);
         if let Some(q) = s.queues.get_mut(&path) {
+            debug!("Message forwarded to queue {}: {}", q.name, message.content);
             q.send_message(message.clone());
         }
     }
@@ -233,7 +244,7 @@ pub async fn subscribe(
                 <RequestId>{}</RequestId>\
             </ResponseMetadata>\
         </SubscribeResponse>",
-            subscription_arn,
+            escape_xml(&subscription_arn),
             get_new_id(),
         );
         Ok(output)

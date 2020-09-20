@@ -1,3 +1,4 @@
+use crate::misc::escape_xml;
 use indexmap::IndexMap;
 
 pub trait FormatXML {
@@ -6,7 +7,7 @@ pub trait FormatXML {
 
 impl FormatXML for String {
     fn to_xml_string(&self, key: &str) -> String {
-        format!("<{0}>{1}</{0}>", key, self)
+        format!("<{0}>{1}</{0}>", key, escape_xml(&self))
     }
 }
 
@@ -16,7 +17,7 @@ where
 {
     fn to_xml_string(&self, key: &str) -> String {
         let content: Vec<String> = self.iter().map(|(k, v)| v.to_xml_string(k)).collect();
-        format!("<{0}>{1}</{0}>", key, content.join(""))
+        format!("<{0}>{1}</{0}>", key, escape_xml(&content.join("")))
     }
 }
 

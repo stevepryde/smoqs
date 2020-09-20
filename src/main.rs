@@ -1,6 +1,6 @@
 use crate::sqs::{
-    create_queue, delete_queue, get_queue_attributes, list_queues, receive_message, send_message,
-    set_queue_attributes,
+    create_queue, delete_message, delete_queue, get_queue_attributes, list_queues, receive_message,
+    send_message, set_queue_attributes,
 };
 use crate::state::State;
 
@@ -105,6 +105,7 @@ pub async fn handle_request(
                 "SetQueueAttributes" => set_queue_attributes(f, state).await,
                 "SendMessage" => send_message(f, state).await,
                 "ReceiveMessage" => receive_message(f, state).await,
+                "DeleteMessage" => delete_message(f, state).await,
                 // SNS.
                 "ListTopics" => list_topics(f, state).await,
                 "CreateTopic" => create_topic(f, state).await,

@@ -1,6 +1,6 @@
 use crate::errors::{MyError, MyResult};
 use crate::misc::{
-    get_attributes, get_message_attribute_names, get_message_attributes, get_new_id,
+    escape_xml, get_attributes, get_message_attribute_names, get_message_attributes, get_new_id,
 };
 use crate::state::{Message, SQSQueue, State};
 use crate::xml::FormatXML;
@@ -63,7 +63,7 @@ pub async fn create_queue(
                 <RequestId>{}</RequestId>\
             </ResponseMetadata>\
         </CreateQueueResponse>",
-        queue_url,
+        escape_xml(&queue_url),
         get_new_id(),
     );
     Ok(output)
@@ -109,7 +109,8 @@ pub async fn get_queue_attributes(
                     <Name>{}</Name>\
                     <Value>{}</Value>\
                  </Attribute>",
-                k, v
+                escape_xml(k),
+                escape_xml(v)
             ));
         }
         let output = format!(
@@ -303,6 +304,21 @@ pub async fn receive_message(
           </ResponseMetadata>\
         </ReceiveMessageResponse>",
         messages_xml.join(""),
+        get_new_id(),
+    );
+    Ok(output)
+}
+
+pub async fn delete_message(
+    _form: HashMap<String, String>,
+    _state: Arc<Mutex<State>>,
+) -> MyResult<String> {
+    let output = format!(
+        "<DeleteMessageResponse>\
+          <ResponseMetadata>\
+            <RequestId>{}</RequestId>\
+          </ResponseMetadata>\
+        </DeleteMessageResponse>",
         get_new_id(),
     );
     Ok(output)

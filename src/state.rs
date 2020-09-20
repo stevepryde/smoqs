@@ -1,4 +1,4 @@
-use crate::misc::get_new_id;
+use crate::misc::{escape_xml, get_new_id};
 use log::warn;
 use md5::{Digest, Md5};
 use std::collections::hash_map::Entry;
@@ -41,8 +41,13 @@ impl State {
     }
 
     pub fn get_queue_path(&self, queue_url: &str) -> QueuePath {
-        let p = queue_url.rsplit('/').next().unwrap_or(queue_url);
-        QueuePath(p.to_string())
+        if queue_url.starts_with("arn") {
+            let p = queue_url.rsplit(':').next().unwrap_or(queue_url);
+            QueuePath(p.to_string())
+        } else {
+            let p = queue_url.rsplit('/').next().unwrap_or(queue_url);
+            QueuePath(p.to_string())
+        }
     }
 
     pub fn get_queue_url(&self, queue_name: &str) -> String {
@@ -75,7 +80,7 @@ impl State {
 #[derive(Debug, Clone)]
 pub struct Message {
     pub id: String,
-    content: String,
+    pub content: String,
     attributes: HashMap<String, String>,
 }
 
@@ -112,7 +117,8 @@ impl Message {
                         <Name>{}</Name>\
                         <Value>{}</Value>\
                      </Attribute>",
-                    k, v
+                    escape_xml(k),
+                    escape_xml(v)
                 ));
             }
         }
@@ -132,7 +138,7 @@ impl Message {
             </Message>",
             self.id,
             self.get_content_md5(),
-            self.content,
+            escape_xml(&self.content),
             self.get_attribute_xml(attribute_names),
         )
     }
@@ -223,7 +229,11 @@ impl SNSSubscription {
                 <Owner>{}</Owner>\
                 <Endpoint>{}</Endpoint>\
             </member>",
-            self.topic_arn, self.protocol, self.arn, self.owner, self.endpoint
+            escape_xml(&self.topic_arn),
+            escape_xml(&self.protocol),
+            escape_xml(&self.arn),
+            escape_xml(&self.owner),
+            escape_xml(&self.endpoint)
         )
     }
 }
