@@ -15,6 +15,8 @@ pub enum MyError {
     MissingParameter(String),
     #[error("Queue not found: {0}")]
     QueueNotFound(String),
+    #[error("Topic not found: {0}")]
+    TopicNotFound(String),
 }
 
 pub type MyResult<T> = Result<T, MyError>;

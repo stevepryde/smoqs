@@ -14,11 +14,16 @@ use std::sync::RwLock;
 use structopt::StructOpt;
 
 use crate::errors::MyError;
+use crate::sns::{
+    create_topic, delete_topic, get_topic_attributes, list_topics, publish, set_topic_attributes,
+    subscribe, unsubscribe,
+};
 use warp::http::Response;
 use warp::Filter;
 
 mod errors;
 mod misc;
+mod sns;
 mod sqs;
 mod state;
 mod xml;
@@ -67,6 +72,7 @@ async fn main() {
             Some(action) => {
                 info!("ACTION: {}: {:?}", action, f);
                 let result = match action.as_str() {
+                    // SQS.
                     "ListQueues" => list_queues(f, state),
                     "CreateQueue" => create_queue(f, state),
                     "DeleteQueue" => delete_queue(f, state),
@@ -74,6 +80,15 @@ async fn main() {
                     "SetQueueAttributes" => set_queue_attributes(f, state),
                     "SendMessage" => send_message(f, state),
                     "ReceiveMessage" => receive_message(f, state),
+                    // SNS.
+                    "ListTopics" => list_topics(f, state),
+                    "CreateTopic" => create_topic(f, state),
+                    "DeleteTopic" => delete_topic(f, state),
+                    "GetTopicAttributes" => get_topic_attributes(f, state),
+                    "SetTopicAttributes" => set_topic_attributes(f, state),
+                    "Publish" => publish(f, state),
+                    "Subscribe" => subscribe(f, state),
+                    "Unsubscribe" => unsubscribe(f, state),
                     x => Err(MyError::UnknownAction(x.to_string())),
                 };
 

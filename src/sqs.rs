@@ -153,6 +153,7 @@ pub fn send_message(form: HashMap<String, String>, state: Arc<RwLock<State>>) ->
     let mut s = state.write()?;
     if let Some(q) = s.queues.get_mut(queue_url) {
         let message = Message::new(message_body, attributes);
+        let message_id = message.id.clone();
         let md5_message = message.get_content_md5();
         let md5_attributes = message.get_attribute_md5();
         q.send_message(message);
@@ -170,7 +171,7 @@ pub fn send_message(form: HashMap<String, String>, state: Arc<RwLock<State>>) ->
             </SendMessageResponse>",
             md5_message,
             md5_attributes,
-            get_new_id(),
+            message_id,
             get_new_id(),
         );
         Ok(output)
