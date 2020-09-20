@@ -1037,7 +1037,6 @@ dependencies = [
  "structopt",
  "thiserror",
  "tokio",
- "url",
  "uuid",
  "warp",
 ]

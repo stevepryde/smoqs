@@ -2,7 +2,6 @@ use crate::misc::get_new_id;
 use md5::{Digest, Md5};
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
-use url::Url;
 
 pub struct State {
     pub account_id: String,
@@ -41,10 +40,8 @@ impl State {
     }
 
     pub fn get_queue_path(&self, queue_url: &str) -> QueuePath {
-        let p = Url::parse(queue_url)
-            .map(|u| u.path().to_string())
-            .unwrap_or(queue_url.to_string());
-        QueuePath(p)
+        let p = queue_url.rsplit('/').next().unwrap_or(queue_url);
+        QueuePath(p.to_string())
     }
 
     pub fn get_queue_url(&self, queue_name: &str) -> String {
