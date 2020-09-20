@@ -2,7 +2,7 @@
 authors = ["Steve Pryde <steve@stevepryde.com>"]
 edition = "2018"
 name = "smoqs"
-version = "0.3.0"
+version = "0.4.0"
 license = "MIT"
 description = "SmoQS is a mock for SNS/SQS providing a fast, in-memory queue"
 homepage = "https://github.com/stevepryde/smoqs"
@@ -10,7 +10,7 @@ repository = "https://github.com/stevepryde/smoqs"
 readme = "README.md"
 
 [dependencies]
-tokio = { version = "0.2", features = ["rt-threaded", "macros"]}
+tokio = { version = "0.2", features = ["rt-threaded", "macros", "sync", "time"]}
 warp = "0.2"
 log = "0.4.8"
 serde_json = { version = "1.0", features = ["preserve_order"] }

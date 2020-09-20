@@ -6,15 +6,22 @@ use crate::state::{Message, SQSQueue, State};
 use crate::xml::FormatXML;
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use tokio::sync::oneshot::Receiver;
+use tokio::sync::Mutex;
+use tokio::time::Duration;
 
-pub fn list_queues(_form: HashMap<String, String>, state: Arc<RwLock<State>>) -> MyResult<String> {
-    let s = state.read()?;
-    let queue_urls: Vec<String> = s
-        .queues
-        .values()
-        .map(|q| s.get_queue_url(&q.name))
-        .collect();
+pub async fn list_queues(
+    _form: HashMap<String, String>,
+    state: Arc<Mutex<State>>,
+) -> MyResult<String> {
+    let queue_urls: Vec<String> = {
+        let s = state.lock().await;
+        s.queues
+            .values()
+            .map(|q| s.get_queue_url(&q.name))
+            .collect()
+    };
 
     let output = format!(
         "<ListQueuesResponse>\
@@ -31,15 +38,21 @@ pub fn list_queues(_form: HashMap<String, String>, state: Arc<RwLock<State>>) ->
     Ok(output)
 }
 
-pub fn create_queue(form: HashMap<String, String>, state: Arc<RwLock<State>>) -> MyResult<String> {
+pub async fn create_queue(
+    form: HashMap<String, String>,
+    state: Arc<Mutex<State>>,
+) -> MyResult<String> {
     let queue_name = form
         .get("QueueName")
         .ok_or_else(|| MyError::MissingParameter("QueueName".to_string()))?;
     let attributes = get_attributes(&form);
     let q = SQSQueue::new(queue_name, attributes);
-    let mut s = state.write()?;
-    s.add_queue(q);
-    let queue_url = s.get_queue_url(&queue_name);
+
+    let queue_url = {
+        let mut s = state.lock().await;
+        s.add_queue(q);
+        s.get_queue_url(&queue_name)
+    };
 
     let output = format!(
         "<CreateQueueResponse>\
@@ -56,12 +69,17 @@ pub fn create_queue(form: HashMap<String, String>, state: Arc<RwLock<State>>) ->
     Ok(output)
 }
 
-pub fn delete_queue(form: HashMap<String, String>, state: Arc<RwLock<State>>) -> MyResult<String> {
+pub async fn delete_queue(
+    form: HashMap<String, String>,
+    state: Arc<Mutex<State>>,
+) -> MyResult<String> {
     let queue_url = form
         .get("QueueUrl")
         .ok_or_else(|| MyError::MissingParameter("QueueUrl".to_string()))?;
-    let mut s = state.write()?;
-    s.remove_queue(queue_url);
+    {
+        let mut s = state.lock().await;
+        s.remove_queue(queue_url);
+    }
 
     let output = format!(
         "<DeleteQueueResponse>\
@@ -74,14 +92,14 @@ pub fn delete_queue(form: HashMap<String, String>, state: Arc<RwLock<State>>) ->
     Ok(output)
 }
 
-pub fn get_queue_attributes(
+pub async fn get_queue_attributes(
     form: HashMap<String, String>,
-    state: Arc<RwLock<State>>,
+    state: Arc<Mutex<State>>,
 ) -> MyResult<String> {
     let queue_url = form
         .get("QueueUrl")
         .ok_or_else(|| MyError::MissingParameter("QueueUrl".to_string()))?;
-    let s = state.read()?;
+    let s = state.lock().await;
     let path = s.get_queue_path(queue_url);
     if let Some(q) = s.queues.get(&path) {
         let mut attributes_str = String::new();
@@ -112,15 +130,15 @@ pub fn get_queue_attributes(
     }
 }
 
-pub fn set_queue_attributes(
+pub async fn set_queue_attributes(
     form: HashMap<String, String>,
-    state: Arc<RwLock<State>>,
+    state: Arc<Mutex<State>>,
 ) -> MyResult<String> {
     let queue_url = form
         .get("QueueUrl")
         .ok_or_else(|| MyError::MissingParameter("QueueUrl".to_string()))?;
     let attributes = get_attributes(&form);
-    let mut s = state.write()?;
+    let mut s = state.lock().await;
     let path = s.get_queue_path(queue_url);
     if let Some(q) = s.queues.get_mut(&path) {
         q.attributes = attributes;
@@ -138,7 +156,10 @@ pub fn set_queue_attributes(
     }
 }
 
-pub fn send_message(form: HashMap<String, String>, state: Arc<RwLock<State>>) -> MyResult<String> {
+pub async fn send_message(
+    form: HashMap<String, String>,
+    state: Arc<Mutex<State>>,
+) -> MyResult<String> {
     let queue_url = form
         .get("QueueUrl")
         .ok_or_else(|| MyError::MissingParameter("QueueUrl".to_string()))?;
@@ -152,7 +173,7 @@ pub fn send_message(form: HashMap<String, String>, state: Arc<RwLock<State>>) ->
         .flatten()
         .unwrap_or(0);
     let attributes = get_message_attributes(&form);
-    let mut s = state.write()?;
+    let mut s = state.lock().await;
     let path = s.get_queue_path(queue_url);
     if let Some(q) = s.queues.get_mut(&path) {
         let message = Message::new(message_body, attributes);
@@ -183,9 +204,41 @@ pub fn send_message(form: HashMap<String, String>, state: Arc<RwLock<State>>) ->
     }
 }
 
-pub fn receive_message(
+enum MessageOrWaiter {
+    Message(Vec<String>),
+    Waiter(Receiver<bool>),
+}
+
+async fn get_message_or_waiter(
+    queue_url: &str,
+    max_count: u8,
+    attribute_names: &Vec<String>,
+    state: Arc<Mutex<State>>,
+) -> MyResult<MessageOrWaiter> {
+    let mut s = state.lock().await;
+    let path = s.get_queue_path(queue_url);
+    match s.queues.get_mut(&path) {
+        Some(q) => {
+            match q.has_message() {
+                true => {
+                    // Pop messages.
+                    let messages = q.receive_messages(max_count);
+                    let messages_xml = messages
+                        .iter()
+                        .map(|m| m.get_message_xml(attribute_names))
+                        .collect();
+                    Ok(MessageOrWaiter::Message(messages_xml))
+                }
+                false => Ok(MessageOrWaiter::Waiter(q.get_waiter())),
+            }
+        }
+        None => Err(MyError::QueueNotFound(queue_url.to_string())),
+    }
+}
+
+pub async fn receive_message(
     form: HashMap<String, String>,
-    state: Arc<RwLock<State>>,
+    state: Arc<Mutex<State>>,
 ) -> MyResult<String> {
     let queue_url = form
         .get("QueueUrl")
@@ -198,31 +251,59 @@ pub fn receive_message(
     if max_count > 10 || max_count < 1 {
         max_count = 1;
     }
+    let wait_time_seconds: u64 = form
+        .get("WaitTimeSeconds")
+        .map(|n| n.parse().ok())
+        .flatten()
+        .unwrap_or(0);
     let attribute_names = get_message_attribute_names(&form);
-    let mut s = state.write()?;
-    let path = s.get_queue_path(queue_url);
-    if let Some(q) = s.queues.get_mut(&path) {
-        // Pop messages.
-        let messages = q.receive_messages(max_count);
-        let messages_xml: Vec<String> = messages
-            .iter()
-            .map(|m| m.get_message_xml(&attribute_names))
-            .collect();
 
-        let output = format!(
-            "<ReceiveMessageResponse>\
-              <ReceiveMessageResult>\
-                {}\
-              </ReceiveMessageResult>\
-              <ResponseMetadata>\
-                <RequestId>{}</RequestId>\
-              </ResponseMetadata>\
-            </ReceiveMessageResponse>",
-            messages_xml.join(""),
-            get_new_id(),
-        );
-        Ok(output)
-    } else {
-        Err(MyError::QueueNotFound(queue_url.clone()))
-    }
+    let messages_xml: Vec<String> = match get_message_or_waiter(
+        &queue_url,
+        max_count,
+        &attribute_names,
+        state.clone(),
+    )
+    .await?
+    {
+        MessageOrWaiter::Message(x) => {
+            // Message already waiting.
+            x
+        }
+        MessageOrWaiter::Waiter(w) => {
+            if wait_time_seconds > 0 {
+                // No messages, but we want to wait.
+                if tokio::time::timeout(Duration::new(wait_time_seconds, 0), w)
+                    .await
+                    .is_ok()
+                {
+                    // We got a message.
+                    match get_message_or_waiter(&queue_url, max_count, &attribute_names, state)
+                        .await?
+                    {
+                        MessageOrWaiter::Message(x) => x,
+                        MessageOrWaiter::Waiter(_) => Vec::new(),
+                    }
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            }
+        }
+    };
+
+    let output = format!(
+        "<ReceiveMessageResponse>\
+          <ReceiveMessageResult>\
+            {}\
+          </ReceiveMessageResult>\
+          <ResponseMetadata>\
+            <RequestId>{}</RequestId>\
+          </ResponseMetadata>\
+        </ReceiveMessageResponse>",
+        messages_xml.join(""),
+        get_new_id(),
+    );
+    Ok(output)
 }

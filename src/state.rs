@@ -1,4 +1,5 @@
 use crate::misc::get_new_id;
+use log::warn;
 use md5::{Digest, Md5};
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
@@ -144,6 +145,9 @@ pub struct SQSQueue {
     pub name: String,
     pub attributes: HashMap<String, String>,
     pub messages: VecDeque<Message>,
+    // Ring the bell when sending messages, if one exists.
+    // This allows us to wait for messages efficiently without polling.
+    pub bell: Option<tokio::sync::oneshot::Sender<bool>>,
 }
 
 impl SQSQueue {
@@ -152,11 +156,27 @@ impl SQSQueue {
             name: name.to_string(),
             attributes,
             messages: VecDeque::new(),
+            bell: None,
         }
+    }
+
+    pub fn has_message(&self) -> bool {
+        !self.messages.is_empty()
+    }
+
+    pub fn get_waiter(&mut self) -> tokio::sync::oneshot::Receiver<bool> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.bell = Some(tx);
+        rx
     }
 
     pub fn send_message(&mut self, message: Message) {
         self.messages.push_back(message);
+        if let Some(sender) = self.bell.take() {
+            if let Err(e) = sender.send(true) {
+                warn!("Failed to notify receiver of message: {:?}", e);
+            }
+        }
     }
 
     pub fn receive_messages(&mut self, count: u8) -> Vec<Message> {

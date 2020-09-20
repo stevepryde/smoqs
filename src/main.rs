@@ -7,20 +7,20 @@ use crate::state::State;
 use env_logger::Env;
 use log::{debug, info};
 
-use std::collections::HashMap;
-use std::net::SocketAddr;
-use std::sync::Arc;
-use std::sync::RwLock;
-use structopt::StructOpt;
-
 use crate::errors::MyError;
 use crate::sns::{
     create_topic, delete_topic, get_topic_attributes, list_subscriptions,
     list_subscriptions_by_topic, list_topics, publish, set_topic_attributes, subscribe,
     unsubscribe,
 };
+use std::collections::HashMap;
+use std::convert::Infallible;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use structopt::StructOpt;
+use tokio::sync::Mutex;
 use warp::http::Response;
-use warp::Filter;
+use warp::{Filter, Reply};
 
 mod errors;
 mod misc;
@@ -63,7 +63,7 @@ async fn main() {
     let region = opt.region.unwrap_or_else(|| "ap-southeast-2".to_string());
     let account_id = opt.account.unwrap_or_else(|| "000000000000".to_string());
 
-    let addr: SocketAddr = match format!("127.0.0.1:{}", port).parse() {
+    let addr: SocketAddr = match format!("0.0.0.0:{}", port).parse() {
         Ok(x) => x,
         Err(e) => {
             println!("Unable to access port: {:?}", e);
@@ -72,7 +72,7 @@ async fn main() {
     };
 
     // Set up state.
-    let state: Arc<RwLock<State>> = Arc::new(RwLock::new(State::new(port, &region, &account_id)));
+    let state: Arc<Mutex<State>> = Arc::new(Mutex::new(State::new(port, &region, &account_id)));
     let state_filter = warp::any().map(move || state.clone());
 
     // Routes.
@@ -83,45 +83,58 @@ async fn main() {
         .and(warp::body::content_length_limit(1024 * 1024 * 2))
         .and(warp::body::form())
         .and(state_filter.clone())
-        .map(|f: HashMap<String, String>, state| match f.get("Action") {
-            Some(action) => {
-                info!("ACTION: {}: {:?}", action, f);
-                let result = match action.as_str() {
-                    // SQS.
-                    "ListQueues" => list_queues(f, state),
-                    "CreateQueue" => create_queue(f, state),
-                    "DeleteQueue" => delete_queue(f, state),
-                    "GetQueueAttributes" => get_queue_attributes(f, state),
-                    "SetQueueAttributes" => set_queue_attributes(f, state),
-                    "SendMessage" => send_message(f, state),
-                    "ReceiveMessage" => receive_message(f, state),
-                    // SNS.
-                    "ListTopics" => list_topics(f, state),
-                    "CreateTopic" => create_topic(f, state),
-                    "DeleteTopic" => delete_topic(f, state),
-                    "GetTopicAttributes" => get_topic_attributes(f, state),
-                    "SetTopicAttributes" => set_topic_attributes(f, state),
-                    "Publish" => publish(f, state),
-                    "Subscribe" => subscribe(f, state),
-                    "Unsubscribe" => unsubscribe(f, state),
-                    "ListSubscriptions" => list_subscriptions(f, state),
-                    "ListSubscriptionsByTopic" => list_subscriptions_by_topic(f, state),
-                    x => Err(MyError::UnknownAction(x.to_string())),
-                };
-
-                match result {
-                    Ok(x) => {
-                        debug!("Response:\n{}", x);
-                        Response::builder().status(200).body(x)
-                    }
-                    Err(e) => Response::builder().status(400).body(e.get_error_response()),
-                }
-            }
-            None => Response::builder()
-                .status(404)
-                .body(MyError::MissingAction.get_error_response()),
-        });
+        .and_then(handle_request);
 
     info!("Server running at {}", addr);
     warp::serve(healthz.or(root_post_form)).run(addr).await;
+}
+
+pub async fn handle_request(
+    f: HashMap<String, String>,
+    state: Arc<Mutex<State>>,
+) -> Result<impl Reply, Infallible> {
+    match f.get("Action") {
+        Some(action) => {
+            info!("ACTION: {}: {:?}", action, f);
+            let result = match action.as_str() {
+                // SQS.
+                "ListQueues" => list_queues(f, state).await,
+                "CreateQueue" => create_queue(f, state).await,
+                "DeleteQueue" => delete_queue(f, state).await,
+                "GetQueueAttributes" => get_queue_attributes(f, state).await,
+                "SetQueueAttributes" => set_queue_attributes(f, state).await,
+                "SendMessage" => send_message(f, state).await,
+                "ReceiveMessage" => receive_message(f, state).await,
+                // SNS.
+                "ListTopics" => list_topics(f, state).await,
+                "CreateTopic" => create_topic(f, state).await,
+                "DeleteTopic" => delete_topic(f, state).await,
+                "GetTopicAttributes" => get_topic_attributes(f, state).await,
+                "SetTopicAttributes" => set_topic_attributes(f, state).await,
+                "Publish" => publish(f, state).await,
+                "Subscribe" => subscribe(f, state).await,
+                "Unsubscribe" => unsubscribe(f, state).await,
+                "ListSubscriptions" => list_subscriptions(f, state).await,
+                "ListSubscriptionsByTopic" => list_subscriptions_by_topic(f, state).await,
+                x => Err(MyError::UnknownAction(x.to_string())),
+            };
+
+            match result {
+                Ok(x) => {
+                    debug!("Response:\n{}", x);
+                    Ok(Response::builder().status(200).body(x))
+                }
+                Err(e) => {
+                    let resp = e.get_error_response();
+                    debug!("Response:\n{}", resp);
+                    Ok(Response::builder().status(400).body(resp))
+                }
+            }
+        }
+        None => {
+            let resp = MyError::MissingAction.get_error_response();
+            debug!("Response:\n{}", resp);
+            Ok(Response::builder().status(400).body(resp))
+        }
+    }
 }

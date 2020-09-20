@@ -2,10 +2,14 @@ use crate::errors::{MyError, MyResult};
 use crate::misc::{get_attributes, get_message_attributes, get_new_id};
 use crate::state::{Message, SNSSubscription, SNSTopic, State, TopicArn};
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
-pub fn list_topics(_form: HashMap<String, String>, state: Arc<RwLock<State>>) -> MyResult<String> {
-    let s = state.read()?;
+pub async fn list_topics(
+    _form: HashMap<String, String>,
+    state: Arc<Mutex<State>>,
+) -> MyResult<String> {
+    let s = state.lock().await;
     let mut topics_xml = String::new();
     for topic in s.topics.values() {
         let topic_xml = format!("<Topic><TopicArn>{}</TopicArn></Topic>", topic.arn);
@@ -29,12 +33,15 @@ pub fn list_topics(_form: HashMap<String, String>, state: Arc<RwLock<State>>) ->
     Ok(output)
 }
 
-pub fn create_topic(form: HashMap<String, String>, state: Arc<RwLock<State>>) -> MyResult<String> {
+pub async fn create_topic(
+    form: HashMap<String, String>,
+    state: Arc<Mutex<State>>,
+) -> MyResult<String> {
     let topic_name = form
         .get("Name")
         .ok_or_else(|| MyError::MissingParameter("Name".to_string()))?;
     let attributes = get_attributes(&form);
-    let mut s = state.write()?;
+    let mut s = state.lock().await;
     let arn = s.get_topic_arn(topic_name);
     let topic = SNSTopic::new(topic_name, &arn, attributes);
 
@@ -56,11 +63,14 @@ pub fn create_topic(form: HashMap<String, String>, state: Arc<RwLock<State>>) ->
     Ok(output)
 }
 
-pub fn delete_topic(form: HashMap<String, String>, state: Arc<RwLock<State>>) -> MyResult<String> {
+pub async fn delete_topic(
+    form: HashMap<String, String>,
+    state: Arc<Mutex<State>>,
+) -> MyResult<String> {
     let topic_arn = form
         .get("TopicArn")
         .ok_or_else(|| MyError::MissingParameter("TopicArn".to_string()))?;
-    let mut s = state.write()?;
+    let mut s = state.lock().await;
 
     s.remove_topic(&TopicArn(topic_arn.clone()));
 
@@ -75,14 +85,14 @@ pub fn delete_topic(form: HashMap<String, String>, state: Arc<RwLock<State>>) ->
     Ok(output)
 }
 
-pub fn get_topic_attributes(
+pub async fn get_topic_attributes(
     form: HashMap<String, String>,
-    state: Arc<RwLock<State>>,
+    state: Arc<Mutex<State>>,
 ) -> MyResult<String> {
     let topic_arn = form
         .get("TopicArn")
         .ok_or_else(|| MyError::MissingParameter("TopicArn".to_string()))?;
-    let s = state.read()?;
+    let s = state.lock().await;
     let arn = TopicArn(topic_arn.clone());
     if let Some(t) = s.topics.get(&arn) {
         let mut attributes_str = String::new();
@@ -113,15 +123,15 @@ pub fn get_topic_attributes(
     }
 }
 
-pub fn set_topic_attributes(
+pub async fn set_topic_attributes(
     form: HashMap<String, String>,
-    state: Arc<RwLock<State>>,
+    state: Arc<Mutex<State>>,
 ) -> MyResult<String> {
     let topic_arn = form
         .get("TopicArn")
         .ok_or_else(|| MyError::MissingParameter("TopicArn".to_string()))?;
     let attributes = get_attributes(&form);
-    let mut s = state.write()?;
+    let mut s = state.lock().await;
     let arn = TopicArn(topic_arn.clone());
     if let Some(q) = s.topics.get_mut(&arn) {
         q.attributes = attributes;
@@ -139,7 +149,7 @@ pub fn set_topic_attributes(
     }
 }
 
-pub fn publish(form: HashMap<String, String>, state: Arc<RwLock<State>>) -> MyResult<String> {
+pub async fn publish(form: HashMap<String, String>, state: Arc<Mutex<State>>) -> MyResult<String> {
     let target_arn = match form.get("TargetArn") {
         Some(x) => x,
         None => form
@@ -156,7 +166,7 @@ pub fn publish(form: HashMap<String, String>, state: Arc<RwLock<State>>) -> MyRe
         .unwrap_or_else(|| "json".to_string());
 
     let attributes = get_message_attributes(&form);
-    let mut s = state.write()?;
+    let mut s = state.lock().await;
     let arn = TopicArn(target_arn.clone());
     let queue_urls = match s.topics.get_mut(&arn) {
         Some(t) => t.get_queue_urls(),
@@ -191,7 +201,10 @@ pub fn publish(form: HashMap<String, String>, state: Arc<RwLock<State>>) -> MyRe
     Ok(output)
 }
 
-pub fn subscribe(form: HashMap<String, String>, state: Arc<RwLock<State>>) -> MyResult<String> {
+pub async fn subscribe(
+    form: HashMap<String, String>,
+    state: Arc<Mutex<State>>,
+) -> MyResult<String> {
     let topic_arn = form
         .get("TopicArn")
         .ok_or_else(|| MyError::MissingParameter("TopicArn".to_string()))?;
@@ -203,7 +216,7 @@ pub fn subscribe(form: HashMap<String, String>, state: Arc<RwLock<State>>) -> My
         .get("Protocol")
         .ok_or_else(|| MyError::MissingParameter("Protocol".to_string()))?;
 
-    let mut s = state.write()?;
+    let mut s = state.lock().await;
     let account_id = s.account_id.clone();
     let arn = TopicArn(topic_arn.clone());
     if let Some(t) = s.topics.get_mut(&arn) {
@@ -229,12 +242,15 @@ pub fn subscribe(form: HashMap<String, String>, state: Arc<RwLock<State>>) -> My
     }
 }
 
-pub fn unsubscribe(form: HashMap<String, String>, state: Arc<RwLock<State>>) -> MyResult<String> {
+pub async fn unsubscribe(
+    form: HashMap<String, String>,
+    state: Arc<Mutex<State>>,
+) -> MyResult<String> {
     let subscription_arn = form
         .get("SubscriptionArn")
         .ok_or_else(|| MyError::MissingParameter("SubscriptionArn".to_string()))?;
 
-    let mut s = state.write()?;
+    let mut s = state.lock().await;
     for topic in s.topics.values_mut() {
         topic.remove_subscription(subscription_arn);
     }
@@ -250,11 +266,11 @@ pub fn unsubscribe(form: HashMap<String, String>, state: Arc<RwLock<State>>) -> 
     Ok(output)
 }
 
-pub fn list_subscriptions(
+pub async fn list_subscriptions(
     _form: HashMap<String, String>,
-    state: Arc<RwLock<State>>,
+    state: Arc<Mutex<State>>,
 ) -> MyResult<String> {
-    let s = state.read()?;
+    let s = state.lock().await;
     let mut subscription_xml = String::new();
     for topic in s.topics.values() {
         for sub in &topic.subscriptions {
@@ -279,15 +295,15 @@ pub fn list_subscriptions(
     Ok(output)
 }
 
-pub fn list_subscriptions_by_topic(
+pub async fn list_subscriptions_by_topic(
     form: HashMap<String, String>,
-    state: Arc<RwLock<State>>,
+    state: Arc<Mutex<State>>,
 ) -> MyResult<String> {
     let topic_arn = form
         .get("TopicArn")
         .ok_or_else(|| MyError::MissingParameter("TopicArn".to_string()))?;
 
-    let s = state.read()?;
+    let s = state.lock().await;
 
     let arn = TopicArn(topic_arn.clone());
     if let Some(t) = s.topics.get(&arn) {
