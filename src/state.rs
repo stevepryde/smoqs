@@ -183,6 +183,19 @@ impl SNSSubscription {
             topic_arn: topic_arn.to_string(),
         }
     }
+
+    pub fn get_subscription_xml(&self) -> String {
+        format!(
+            "<member>\
+                <TopicArn>{}</TopicArn>\
+                <Protocol>{}</Protocol>\
+                <SubscriptionArn>{}</SubscriptionArn>\
+                <Owner>{}</Owner>\
+                <Endpoint>{}</Endpoint>\
+            </member>",
+            self.topic_arn, self.protocol, self.arn, self.owner, self.endpoint
+        )
+    }
 }
 
 pub struct SNSTopic {

@@ -243,3 +243,68 @@ pub fn unsubscribe(form: HashMap<String, String>, state: Arc<RwLock<State>>) -> 
     );
     Ok(output)
 }
+
+pub fn list_subscriptions(
+    _form: HashMap<String, String>,
+    state: Arc<RwLock<State>>,
+) -> MyResult<String> {
+    let s = state.read()?;
+    let mut subscription_xml = String::new();
+    for topic in s.topics.values() {
+        for sub in &topic.subscriptions {
+            subscription_xml.push_str(&sub.get_subscription_xml());
+        }
+    }
+
+    let output = format!(
+        "<ListSubscriptionsResponse>\
+            <ListSubscriptionsResult>\
+                <Subscriptions>\
+                    {}\
+                </Subscriptions>\
+            </ListSubscriptionsResult>\
+            <ResponseMetadata>\
+                <RequestId>{}</RequestId>\
+            </ResponseMetadata>\
+        </ListSubscriptionsResponse>",
+        subscription_xml,
+        get_new_id(),
+    );
+    Ok(output)
+}
+
+pub fn list_subscriptions_by_topic(
+    form: HashMap<String, String>,
+    state: Arc<RwLock<State>>,
+) -> MyResult<String> {
+    let topic_arn = form
+        .get("TopicArn")
+        .ok_or_else(|| MyError::MissingParameter("TopicArn".to_string()))?;
+
+    let s = state.read()?;
+
+    if let Some(t) = s.topics.get(topic_arn) {
+        let mut subscription_xml = String::new();
+        for sub in &t.subscriptions {
+            subscription_xml.push_str(&sub.get_subscription_xml());
+        }
+
+        let output = format!(
+            "<ListSubscriptionsByTopicResponse>\
+                <ListSubscriptionsByTopicResult>\
+                    <Subscriptions>\
+                        {}\
+                    </Subscriptions>\
+                </ListSubscriptionsByTopicResult>\
+                <ResponseMetadata>\
+                    <RequestId>{}</RequestId>\
+                </ResponseMetadata>\
+            </ListSubscriptionsByTopicResponse>",
+            subscription_xml,
+            get_new_id(),
+        );
+        Ok(output)
+    } else {
+        Err(MyError::TopicNotFound(topic_arn.clone()))
+    }
+}

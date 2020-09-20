@@ -15,8 +15,9 @@ use structopt::StructOpt;
 
 use crate::errors::MyError;
 use crate::sns::{
-    create_topic, delete_topic, get_topic_attributes, list_topics, publish, set_topic_attributes,
-    subscribe, unsubscribe,
+    create_topic, delete_topic, get_topic_attributes, list_subscriptions,
+    list_subscriptions_by_topic, list_topics, publish, set_topic_attributes, subscribe,
+    unsubscribe,
 };
 use warp::http::Response;
 use warp::Filter;
@@ -103,6 +104,8 @@ async fn main() {
                     "Publish" => publish(f, state),
                     "Subscribe" => subscribe(f, state),
                     "Unsubscribe" => unsubscribe(f, state),
+                    "ListSubscriptions" => list_subscriptions(f, state),
+                    "ListSubscriptionsByTopic" => list_subscriptions_by_topic(f, state),
                     x => Err(MyError::UnknownAction(x.to_string())),
                 };
 
