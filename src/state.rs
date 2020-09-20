@@ -345,4 +345,8 @@ impl ReceivedMessage {
     pub fn has_expired(&self) -> bool {
         Utc::now() > self.expires
     }
+
+    pub fn set_visibility_timeout(&mut self, visibility_timeout: u32) {
+        self.expires = Utc::now() + chrono::Duration::seconds(visibility_timeout as i64)
+    }
 }

@@ -348,3 +348,36 @@ pub async fn delete_message(
     );
     Ok(output)
 }
+
+pub async fn change_message_visibility(
+    form: HashMap<String, String>,
+    state: Arc<Mutex<State>>,
+) -> MyResult<String> {
+    let receipt_handle = form
+        .get("ReceiptHandle")
+        .ok_or_else(|| MyError::MissingParameter("ReceiptHandle".to_string()))?;
+    let visibility_timeout_recv: Option<u32> = form
+        .get("VisibilityTimeout")
+        .map(|n| n.parse().ok())
+        .flatten();
+
+    if let Some(visibility_timeout) = visibility_timeout_recv {
+        let mut s = state.lock().await;
+        if let Some(msg) = s
+            .received_messages
+            .get_mut(&ReceiveHandle(receipt_handle.clone()))
+        {
+            msg.set_visibility_timeout(visibility_timeout);
+        }
+    }
+
+    let output = format!(
+        "<ChangeMessageVisibilityResponse>\
+          <ResponseMetadata>\
+            <RequestId>{}</RequestId>\
+          </ResponseMetadata>\
+        </ChangeMessageVisibilityResponse>",
+        get_new_id(),
+    );
+    Ok(output)
+}
